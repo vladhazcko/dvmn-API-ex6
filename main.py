@@ -3,36 +3,38 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
 FILES_DIRECTORY = 'files/'
-VK_ACCESS_KEY = os.getenv('VK_ACCESS_TOKEN')
-VK_GROUP_ID = os.getenv('VK_GROUP_ID')
 
 
 def main():
+    load_dotenv()
+    vk_access_token = os.getenv('VK_ACCESS_TOKEN')
+    vk_group_id = os.getenv('VK_GROUP_ID')
+
     comic = get_random_comic()
     comic_img_url = comic['img']
     comic_img_path = comic_img_url.split('/')[-1]
     comic_img_alt = comic['alt']
     file_path = download_file(comic_img_url, comic_img_path)
+    try:
+        uploaded_server = send_request_vk('photos.getWallUploadServer', vk_access_token)
+        url = uploaded_server['response']['upload_url']
+        with open(file_path, 'rb') as file:
+            uploaded_photo_params = upload_photo_vk(file, url)
 
-    uploaded_server = send_request_vk('photos.getWallUploadServer')
-    url = uploaded_server['response']['upload_url']
-    with open(file_path, 'rb') as file:
-        uploaded_photo_params = upload_photo_vk(file, url)
+        uploaded_photo = send_request_vk('photos.saveWallPhoto', vk_access_token,
+                                         params=uploaded_photo_params,
+                                         http_method='post')['response']
 
-    uploaded_photo = send_request_vk('photos.saveWallPhoto',
-                                     params=uploaded_photo_params,
-                                     http_method='post')['response']
-
-    attachments = f'photo{uploaded_photo[0]["owner_id"]}_{uploaded_photo[0]["id"]}'
-    send_request_vk('wall.post', http_method='post', params={
-                                           'owner_id': '-' + VK_GROUP_ID,
-                                           'from_group': 1,
-                                           'message': comic_img_alt,
-                                           'attachments': attachments
-                                       })
-    os.remove(file_path)
+        attachments = f'photo{uploaded_photo[0]["owner_id"]}_{uploaded_photo[0]["id"]}'
+        send_request_vk('wall.post', vk_access_token, http_method='post', params={
+            'owner_id': '-' + vk_group_id,
+            'from_group': 1,
+            'message': comic_img_alt,
+            'attachments': attachments
+        })
+    finally:
+        os.remove(file_path)
 
 
 def download_file(url, path, prefix_name='', directory=FILES_DIRECTORY):
@@ -58,7 +60,7 @@ def get_random_comic():
     return response_data.json()
 
 
-def send_request_vk(method_name, access_token=VK_ACCESS_KEY,
+def send_request_vk(method_name, access_token,
                     params=None, http_method='get'):
     if params is None:
         params = {}
@@ -74,7 +76,7 @@ def send_request_vk(method_name, access_token=VK_ACCESS_KEY,
     else:
         response = requests.post(request_url, params)
     response.raise_for_status()
-    return response.json()
+    return check_response_status_vk(response)
 
 
 def upload_photo_vk(file, url):
@@ -82,8 +84,15 @@ def upload_photo_vk(file, url):
         'photo': file
     }
     response = requests.post(url, files=files)
+    return check_response_status_vk(response)
+
+
+def check_response_status_vk(response: requests.models.Response):
     response.raise_for_status()
-    return response.json()
+    response_data = response.json()
+    if 'error' in response_data:
+        raise requests.exceptions.HTTPError(response_data['error'])
+    return response_data
 
 
 if __name__ == '__main__':
